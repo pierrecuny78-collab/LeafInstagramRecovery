@@ -343,10 +343,8 @@ class MainActivity : ComponentActivity() {
             val extras = mutableListOf<String>()
             for (i in 0 until fields.length()) {
                 val field = fields.optJSONObject(i) ?: continue
-                val label = field.optString("label")
-                    .replace("Ã©", "é").replace("Ã¨", "è").replace("Ã ", "à")
-                    .replace("Ã‰", "É").replace("Ãª", "ê")
-                val value = field.optString("value")
+                val label = repairText(field.optString("label"))
+                val value = repairText(field.optString("value"))
                 val href = field.optString("href")
                 // Certains exports placent l'URL dans href sans valeur textuelle.
                 when {
@@ -361,9 +359,17 @@ class MainActivity : ComponentActivity() {
             val itemUrl = url
                 ?: item.optString("url").takeIf { it.startsWith("http", true) }
                 ?: item.optString("href").takeIf { it.startsWith("http", true) }
-            InstagramEntry(title, extras.distinct().joinToString("\n"), itemUrl)
+            InstagramEntry(repairText(title), extras.distinct().map { repairText(it) }.joinToString("\n"), itemUrl)
         }
     }.getOrElse { emptyList() }
+
+    private fun repairText(value: String): String {
+        if (!value.contains("Ã") && !value.contains("â") && !value.contains("ð")) return value
+        return runCatching {
+            val repaired = value.toByteArray(Charsets.ISO_8859_1).toString(Charsets.UTF_8)
+            if (repaired.count { it == '\uFFFD' } < value.count { it == '\uFFFD' }) repaired else value
+        }.getOrDefault(value)
+    }
 
     private fun filteredMedia(): List<MediaRecord> = media.filter { m ->
         (!videoOnly || m.isVideo) &&
@@ -443,6 +449,7 @@ class MainActivity : ComponentActivity() {
             var duplicates = 0
             var warnings = 0
             var totalEntries = 0
+            val importedCategoryNames = mutableListOf<String>()
             try {
                 val added = withContext(Dispatchers.IO) {
                     val root = DocumentFile.fromTreeUri(this@MainActivity, destination) ?: error("Carte SD inaccessible")
@@ -470,6 +477,20 @@ class MainActivity : ComponentActivity() {
                             val text = bytes.toString(Charsets.UTF_8)
                             val parsed = org.json.JSONTokener(text).nextValue()
                             val count = countItems(text)
+                            if (displayName.contains("saved_collections", true) && parsed is JSONArray) {
+                                for (i in 0 until parsed.length()) {
+                                    val item = parsed.optJSONObject(i) ?: continue
+                                    val fields = item.optJSONArray("label_values") ?: continue
+                                    for (j in 0 until fields.length()) {
+                                        val field = fields.optJSONObject(j) ?: continue
+                                        if (repairText(field.optString("label")).equals("Nom", true)) {
+                                            val name = repairText(field.optString("value")).trim()
+                                            if (name.isNotBlank()) importedCategoryNames.add(name)
+                                            break
+                                        }
+                                    }
+                                }
+                            }
                             val category = when {
                                 displayName.contains("saved_posts", true) -> "Publications enregistrées"
                                 displayName.contains("saved_collections", true) -> "Collections enregistrées"
@@ -495,6 +516,10 @@ class MainActivity : ComponentActivity() {
                     result
                 }
                 catalogs.addAll(added)
+                importedCategoryNames.distinctBy { it.lowercase(Locale.ROOT) }.forEach { name ->
+                    if (categories.none { it.equals(name, true) }) categories.add(name)
+                }
+                saveCategories()
                 val ms = media.toList()
                 val cs = catalogs.toList()
                 withContext(Dispatchers.IO) { saveIndexes(ms, cs) }
