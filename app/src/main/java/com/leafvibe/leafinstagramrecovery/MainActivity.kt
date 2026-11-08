@@ -8,6 +8,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Archive
 import androidx.compose.material.icons.filled.Folder
@@ -29,9 +30,11 @@ import java.util.zip.ZipInputStream
 data class MediaRecord(val name:String,val source:String,val hash:String,val bytes:Long,val mime:String)
 data class ImportSummary(val posts:Int=0,val collections:Int=0,val music:Int=0,val copied:Int=0,val duplicates:Int=0,val warnings:Int=0)
 
+@OptIn(ExperimentalMaterial3Api::class)
 class MainActivity:ComponentActivity(){
  private val prefs by lazy{getSharedPreferences("leaf_recovery",MODE_PRIVATE)}
- private val media= mutableStateListOf<MediaRecord>()
+ private val media= mutableListOf<MediaRecord>()
+ private var galleryRevision by mutableIntStateOf(0)
  private var treeUri:Uri?=null
  private var status by mutableStateOf("Choisis un dossier sur ta carte SD, puis importe ton archive Instagram.")
  private var summary by mutableStateOf(ImportSummary())
@@ -59,7 +62,7 @@ class MainActivity:ComponentActivity(){
        Text("Publications : "+summary.posts+"   Collections : "+summary.collections+"   Musiques : "+summary.music)
        Text("Médias copiés : "+summary.copied+"   Doublons : "+summary.duplicates+"   Alertes : "+summary.warnings)
       }}}
-      item{Text("Galerie indexée ("+media.size+")",style=MaterialTheme.typography.titleLarge)}
+      item{Text("Galerie indexée ("+media.size+") • "+galleryRevision,style=MaterialTheme.typography.titleLarge)}
       if(media.isEmpty())item{Text("Aucun média indexé pour le moment.")}
       items(media.size){i->val m=media[i];ListItem(headlineContent={Text(m.name)},supportingContent={Text(m.mime+" • "+(m.bytes/1024)+" Ko • SHA-256 "+m.hash.take(12)+"…")})}
       item{Text("Protection : aucun fichier sain existant n'est supprimé ou remplacé automatiquement. Une URL Instagram n'est pas une copie du média. Un contenu supprimé sans sauvegarde locale ne peut pas être restauré.",style=MaterialTheme.typography.bodySmall)}
@@ -76,7 +79,7 @@ class MainActivity:ComponentActivity(){
  private fun saveIndex(){val a=JSONArray();media.forEach{a.put(JSONObject().put("name",it.name).put("source",it.source).put("hash",it.hash).put("bytes",it.bytes).put("mime",it.mime))};java.io.File(filesDir,"media-index.json").writeText(a.toString())}
  private fun importZip(uri:Uri){
   if(treeUri==null){status="Sélectionne d'abord le dossier de stockage SD.";return}
-  lifecycleScope.launch{busy=true;status="Lecture de l'archive…";try{summary=withContext(Dispatchers.IO){readZip(uri)};status="Import terminé. Les fichiers originaux n'ont pas été modifiés."}catch(e:Exception){status="Import interrompu : "+(e.message?:"erreur inconnue")+". Tu peux le relancer."}finally{busy=false}}
+  lifecycleScope.launch{busy=true;status="Lecture de l'archive…";try{summary=withContext(Dispatchers.IO){readZip(uri)};galleryRevision++;status="Import terminé. Les fichiers originaux n'ont pas été modifiés."}catch(e:Exception){status="Import interrompu : "+(e.message?:"erreur inconnue")+". Tu peux le relancer."}finally{busy=false}}
  }
  private fun readZip(uri:Uri):ImportSummary{
   val root=DocumentFile.fromTreeUri(this,treeUri!!)?:error("Dossier de destination inaccessible")
