@@ -90,6 +90,9 @@ class MainActivity : ComponentActivity() {
                 val videoPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
                     if (uris.isNotEmpty()) importSelectedVideos(uris)
                 }
+                val jsonPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
+                    if (uris.isNotEmpty()) importJsonFiles(uris)
+                }
                 if (showNewCategory) {
                     AlertDialog(
                         onDismissRequest = { showNewCategory = false },
@@ -131,13 +134,19 @@ class MainActivity : ComponentActivity() {
                             }
                         }
                         item {
-                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-                                Button(onClick = { zipPicker.launch(arrayOf("application/zip", "application/x-zip-compressed", "*/*")) }, enabled = !busy, modifier = Modifier.weight(1f)) {
-                                    Icon(Icons.Default.Archive, null); Spacer(Modifier.width(6.dp)); Text("Importer ZIP")
+                            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                                    Button(onClick = { zipPicker.launch(arrayOf("application/zip", "application/x-zip-compressed", "*/*")) }, enabled = !busy, modifier = Modifier.weight(1f)) {
+                                        Icon(Icons.Default.Archive, null); Spacer(Modifier.width(6.dp)); Text("Importer ZIP")
+                                    }
+                                    OutlinedButton(onClick = { videoPicker.launch(arrayOf("video/*")) }, enabled = !busy, modifier = Modifier.weight(1f)) {
+                                        Icon(Icons.Default.VideoLibrary, null); Spacer(Modifier.width(6.dp)); Text("Ajouter vidéos")
+                                    }
                                 }
-                                OutlinedButton(onClick = { videoPicker.launch(arrayOf("video/*")) }, enabled = !busy, modifier = Modifier.weight(1f)) {
-                                    Icon(Icons.Default.VideoLibrary, null); Spacer(Modifier.width(6.dp)); Text("Ajouter vidéos")
+                                OutlinedButton(onClick = { jsonPicker.launch(arrayOf("application/json", "text/plain", "*/*")) }, enabled = !busy, modifier = Modifier.fillMaxWidth()) {
+                                    Text("Importer mes fichiers JSON Instagram")
                                 }
+                                Text("Sélectionne saved_posts.json, saved_collections.json et saved_music.json. Tu peux les sélectionner ensemble.", style = MaterialTheme.typography.bodySmall)
                             }
                         }
                         item {
@@ -293,6 +302,82 @@ class MainActivity : ComponentActivity() {
                 summary = summary.copy(copied = copied, duplicates = duplicates, warnings = warnings)
             } catch (e: Exception) { status = "Échec de la copie : ${e.message}" }
             finally { busy = false }
+        }
+    }
+
+    private fun importJsonFiles(uris: List<Uri>) {
+        val destination = treeUri
+        if (destination == null) { status = "Choisis d'abord le dossier de la carte SD."; return }
+        val known = catalogs.map { it.hash }.toMutableSet()
+        lifecycleScope.launch {
+            busy = true
+            var imported = 0
+            var duplicates = 0
+            var warnings = 0
+            var totalEntries = 0
+            try {
+                val added = withContext(Dispatchers.IO) {
+                    val root = DocumentFile.fromTreeUri(this@MainActivity, destination) ?: error("Carte SD inaccessible")
+                    val folder = root.findFile("LeafInstagramRecovery")?.takeIf { it.isDirectory } ?: root.createDirectory("LeafInstagramRecovery") ?: error("Création du dossier impossible")
+                    val catalogFolder = folder.findFile("catalogues")?.takeIf { it.isDirectory } ?: folder.createDirectory("catalogues") ?: error("Création du dossier catalogues impossible")
+                    val hashes = known
+                    val result = mutableListOf<CatalogRecord>()
+                    uris.forEach { uri ->
+                        try {
+                            val displayName = queryName(uri).ifBlank { "instagram_export.json" }
+                            val bytes = contentResolver.openInputStream(uri).use { input ->
+                                val source = input ?: error("Fichier illisible")
+                                val out = ByteArrayOutputStream()
+                                val buffer = ByteArray(64 * 1024)
+                                var total = 0
+                                while (true) {
+                                    val n = source.read(buffer)
+                                    if (n < 0) break
+                                    total += n
+                                    if (total > 64 * 1024 * 1024) error("JSON trop volumineux (limite 64 Mo)")
+                                    out.write(buffer, 0, n)
+                                }
+                                out.toByteArray()
+                            }
+                            val text = bytes.toString(Charsets.UTF_8)
+                            val parsed = org.json.JSONTokener(text).nextValue()
+                            val count = countItems(text)
+                            val category = when {
+                                displayName.contains("saved_posts", true) -> "Publications enregistrées"
+                                displayName.contains("saved_collections", true) -> "Collections enregistrées"
+                                displayName.contains("saved_music", true) -> "Musiques enregistrées"
+                                else -> "Export Instagram : $displayName"
+                            }
+                            val hash = sha256(bytes)
+                            if (!hashes.add(hash)) { duplicates++ }
+                            else {
+                                val safeName = "catalogue_${hash.take(16)}.json"
+                                val target = catalogFolder.createFile("application/json", safeName) ?: error("Création catalogue impossible")
+                                try {
+                                    contentResolver.openOutputStream(target.uri, "w").use { output ->
+                                        (output ?: error("Écriture impossible")).write(bytes)
+                                    }
+                                    result.add(CatalogRecord(category, displayName, target.name ?: safeName, count, bytes.size.toLong(), hash))
+                                    imported++
+                                    totalEntries += count
+                                } catch (e: Exception) { target.delete(); throw e }
+                            }
+                        } catch (_: Exception) { warnings++ }
+                    }
+                    result
+                }
+                catalogs.addAll(added)
+                val ms = media.toList()
+                val cs = catalogs.toList()
+                withContext(Dispatchers.IO) { saveIndexes(ms, cs) }
+                summary = summary.copy(posts = summary.posts + added.filter { it.category == "Publications enregistrées" }.sumOf { it.items },
+                    collections = summary.collections + added.filter { it.category == "Collections enregistrées" }.sumOf { it.items },
+                    music = summary.music + added.filter { it.category == "Musiques enregistrées" }.sumOf { it.items },
+                    duplicates = duplicates, warnings = warnings)
+                status = "JSON importés : $imported fichier(s), $totalEntries entrée(s), $duplicates doublon(s), $warnings erreur(s). Les fichiers originaux sont conservés sur la SD."
+            } catch (e: Exception) {
+                status = "Import JSON interrompu : ${e.message ?: "erreur inconnue"}."
+            } finally { busy = false }
         }
     }
 
