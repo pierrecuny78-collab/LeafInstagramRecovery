@@ -198,7 +198,9 @@ class MainActivity : ComponentActivity() {
                 media.addAll(result.newMedia)
                 catalogs.addAll(result.newCatalogs)
                 summary = result.summary
-                withContext(Dispatchers.IO) { saveIndexes(media.toList(), catalogs.toList()) }
+                val mediaSnapshot = media.toList()
+                val catalogSnapshot = catalogs.toList()
+                withContext(Dispatchers.IO) { saveIndexes(mediaSnapshot, catalogSnapshot) }
                 status = "Import terminé. ${result.newMedia.size} média(s) ajouté(s), ${result.newCatalogs.size} catalogue(s) archivé(s)."
             } catch (e: Exception) {
                 status = "Import interrompu : ${e.message ?: "erreur inconnue"}. Les fichiers déjà copiés restent conservés ; relance l'import pour reprendre."
