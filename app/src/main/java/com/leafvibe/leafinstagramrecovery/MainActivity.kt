@@ -35,6 +35,8 @@ import java.security.MessageDigest
 import java.util.Locale
 import java.util.UUID
 import java.util.zip.ZipInputStream
+import java.util.zip.ZipOutputStream
+import java.util.zip.ZipEntry
 
 data class MediaRecord(
     val name: String, val source: String, val hash: String, val bytes: Long,
@@ -94,6 +96,9 @@ class MainActivity : ComponentActivity() {
                 }
                 val videoPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
                     if (uris.isNotEmpty()) importSelectedVideos(uris)
+                }
+                val backupPicker = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/zip")) { uri ->
+                    uri?.let { exportFullBackup(it) }
                 }
                 val jsonPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
                     if (uris.isNotEmpty()) importJsonFiles(uris)
@@ -199,6 +204,9 @@ class MainActivity : ComponentActivity() {
                                 }
                                 OutlinedButton(onClick = { jsonPicker.launch(arrayOf("application/json", "text/plain", "*/*")) }, enabled = !busy, modifier = Modifier.fillMaxWidth()) {
                                     Text("Importer mes fichiers JSON Instagram")
+                                }
+                                OutlinedButton(onClick = { backupPicker.launch("LeafInstagramRecovery-sauvegarde.zip") }, enabled = !busy && treeUri != null, modifier = Modifier.fillMaxWidth()) {
+                                    Icon(Icons.Default.Archive, null); Spacer(Modifier.width(8.dp)); Text("Exporter toute la sauvegarde ZIP")
                                 }
                                 Text("Sélectionne saved_posts.json, saved_collections.json et saved_music.json. Tu peux les sélectionner ensemble.", style = MaterialTheme.typography.bodySmall)
                             }
@@ -498,6 +506,47 @@ class MainActivity : ComponentActivity() {
             } catch (e: Exception) {
                 status = "Import JSON interrompu : ${e.message ?: "erreur inconnue"}."
             } finally { busy = false }
+        }
+    }
+
+    private fun exportFullBackup(destination: Uri) {
+        val sourceTree = treeUri
+        if (sourceTree == null) { status = "Configure d'abord le dossier de la carte SD."; return }
+        lifecycleScope.launch {
+            busy = true; status = "Préparation de la sauvegarde ZIP…"
+            try {
+                val exported = withContext(Dispatchers.IO) {
+                    val root = DocumentFile.fromTreeUri(this@MainActivity, sourceTree) ?: error("Dossier SD inaccessible")
+                    val appFolder = root.findFile("LeafInstagramRecovery") ?: error("Dossier LeafInstagramRecovery introuvable")
+                    val output = contentResolver.openOutputStream(destination, "w") ?: error("Création ZIP impossible")
+                    var count = 0
+                    ZipOutputStream(output.buffered()).use { zip ->
+                        fun addTree(folder: DocumentFile, prefix: String) {
+                            folder.listFiles().forEach { file ->
+                                val name = file.name ?: return@forEach
+                                val path = if (prefix.isEmpty()) name else prefix + "/" + name
+                                if (file.isDirectory) { zip.putNextEntry(ZipEntry(path + "/")); zip.closeEntry(); addTree(file, path) }
+                                else {
+                                    zip.putNextEntry(ZipEntry(path))
+                                    contentResolver.openInputStream(file.uri).use { input ->
+                                        val source = input ?: error("Lecture impossible : " + path)
+                                        val buffer = ByteArray(131072)
+                                        while (true) { val n = source.read(buffer); if (n < 0) break; zip.write(buffer, 0, n) }
+                                    }
+                                    zip.closeEntry(); count++
+                                }
+                            }
+                        }
+                        addTree(appFolder, "LeafInstagramRecovery")
+                        zip.putNextEntry(ZipEntry("LeafInstagramRecovery/backup-info.txt"))
+                        zip.write(("Sauvegarde LeafInstagramRecovery\nFichiers : " + count + "\n").toByteArray(Charsets.UTF_8))
+                        zip.closeEntry()
+                    }
+                    count
+                }
+                status = "Sauvegarde ZIP créée : " + exported + " fichiers. Conserve les originaux."
+            } catch (e: Exception) { status = "Échec de l'export ZIP : " + (e.message ?: "erreur inconnue") }
+            finally { busy = false }
         }
     }
 
