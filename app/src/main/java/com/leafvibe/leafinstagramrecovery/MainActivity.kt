@@ -8,6 +8,7 @@ import androidx.activity.compose.setContent
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.text.KeyboardOptions
@@ -43,6 +44,7 @@ data class MediaRecord(
 }
 data class CatalogRecord(val category: String, val source: String, val storedName: String, val items: Int, val bytes: Long, val hash: String)
 data class ImportSummary(val posts: Int = 0, val collections: Int = 0, val music: Int = 0, val copied: Int = 0, val duplicates: Int = 0, val warnings: Int = 0)
+data class InstagramEntry(val title: String, val details: String, val url: String?)
 private data class ImportResult(val summary: ImportSummary, val newMedia: List<MediaRecord>, val newCatalogs: List<CatalogRecord>)
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -60,6 +62,9 @@ class MainActivity : ComponentActivity() {
     private var videoOnly by mutableStateOf(false)
     private var showNewCategory by mutableStateOf(false)
     private var newCategoryName by mutableStateOf("")
+    private var showManageCategories by mutableStateOf(false)
+    private var selectedCatalog by mutableStateOf<CatalogRecord?>(null)
+    private var catalogEntries by mutableStateOf<List<InstagramEntry>>(emptyList())
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -92,6 +97,55 @@ class MainActivity : ComponentActivity() {
                 }
                 val jsonPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
                     if (uris.isNotEmpty()) importJsonFiles(uris)
+                }
+                if (selectedCatalog != null) {
+                    AlertDialog(
+                        onDismissRequest = { selectedCatalog = null; catalogEntries = emptyList() },
+                        title = { Text("Catalogue • " + catalogEntries.size + " éléments") },
+                        text = {
+                            LazyColumn(Modifier.heightIn(max = 480.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                items(catalogEntries) { entry ->
+                                    Card {
+                                        Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                            Text(entry.title, style = MaterialTheme.typography.titleSmall)
+                                            if (entry.details.isNotBlank()) Text(entry.details, style = MaterialTheme.typography.bodySmall)
+                                            if (!entry.url.isNullOrBlank()) {
+                                                Text(entry.url, color = MaterialTheme.colorScheme.primary,
+                                                    modifier = Modifier.clickable { openInstagramUrl(entry.url) })
+                                                TextButton(onClick = { openInstagramUrl(entry.url) }) { Text("Ouvrir le lien Instagram") }
+                                            }
+                                        }
+                                    }
+                                }
+                                if (catalogEntries.isEmpty()) item { Text("Aucune entrée lisible dans ce catalogue.") }
+                            }
+                        },
+                        confirmButton = { TextButton(onClick = { selectedCatalog = null; catalogEntries = emptyList() }) { Text("Fermer") } }
+                    )
+                }
+                if (showManageCategories) {
+                    AlertDialog(
+                        onDismissRequest = { showManageCategories = false },
+                        title = { Text("Gérer les catégories") },
+                        text = {
+                            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                Text("Supprimer une catégorie reclasse ses fichiers dans « À classer ». Les fichiers ne sont jamais supprimés.")
+                                categories.filter { it != "À classer" }.forEach { cat ->
+                                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                                        Text(cat + " (" + media.count { it.category == cat } + ")", modifier = Modifier.weight(1f))
+                                        TextButton(onClick = {
+                                            media.indices.forEach { i -> if (media[i].category == cat) media[i] = media[i].copy(category = "À classer") }
+                                            categories.remove(cat)
+                                            if (selectedCategory == cat) selectedCategory = "Toutes"
+                                            saveCategories()
+                                            persistIndexes()
+                                        }) { Text("Supprimer") }
+                                    }
+                                }
+                            }
+                        },
+                        confirmButton = { TextButton(onClick = { showManageCategories = false }) { Text("Terminer") } }
+                    )
                 }
                 if (showNewCategory) {
                     AlertDialog(
@@ -188,7 +242,10 @@ class MainActivity : ComponentActivity() {
                                         }
                                     }
                                 }
-                                OutlinedButton(onClick = { showNewCategory = true }) { Text("+ Créer une catégorie") }
+                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    OutlinedButton(onClick = { showNewCategory = true }, modifier = Modifier.weight(1f)) { Text("+ Créer") }
+                                    OutlinedButton(onClick = { showManageCategories = true }, modifier = Modifier.weight(1f)) { Text("Gérer / supprimer") }
+                                }
                             }
                         }
                         item { Text("Bibliothèque (${filteredMedia().size})", style = MaterialTheme.typography.titleLarge) }
@@ -223,7 +280,16 @@ class MainActivity : ComponentActivity() {
                             Text("Catalogues importés (${catalogs.size})", style = MaterialTheme.typography.titleLarge)
                         }
                         items(catalogs, key = { it.hash }) { c ->
-                            ListItem(headlineContent = { Text(c.category) }, supportingContent = { Text("${c.items} entrées • ${c.bytes / 1024} Ko") })
+                            Card(Modifier.fillMaxWidth().clickable {
+                                selectedCatalog = c
+                                catalogEntries = readCatalogEntries(c)
+                            }) {
+                                ListItem(
+                                    headlineContent = { Text(c.category) },
+                                    supportingContent = { Text(c.items.toString() + " entrées • " + (c.bytes / 1024) + " Ko • " + c.source) },
+                                    trailingContent = { Text("Voir ›", color = MaterialTheme.colorScheme.primary) }
+                                )
+                            }
                         }
                         item {
                             Text(
@@ -236,6 +302,44 @@ class MainActivity : ComponentActivity() {
             }
         }
     }
+
+    private fun openInstagramUrl(url: String) {
+        runCatching { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) }
+            .onFailure { status = "Impossible d'ouvrir ce lien." }
+    }
+
+    private fun readCatalogEntries(record: CatalogRecord): List<InstagramEntry> = runCatching {
+        val root = treeUri?.let { DocumentFile.fromTreeUri(this, it) } ?: return emptyList()
+        val appFolder = root.findFile("LeafInstagramRecovery") ?: return emptyList()
+        val folder = appFolder.findFile("catalogues") ?: return emptyList()
+        val file = folder.findFile(record.storedName) ?: return emptyList()
+        val raw = contentResolver.openInputStream(file.uri)?.bufferedReader(Charsets.UTF_8)?.use { it.readText() } ?: return emptyList()
+        val array = when (val parsed = org.json.JSONTokener(raw).nextValue()) {
+            is JSONArray -> parsed
+            is JSONObject -> parsed.keys().asSequence().mapNotNull { parsed.opt(it) as? JSONArray }.firstOrNull() ?: JSONArray()
+            else -> JSONArray()
+        }
+        (0 until array.length()).map { index ->
+            val item = array.optJSONObject(index) ?: JSONObject()
+            val fields = item.optJSONArray("label_values") ?: JSONArray()
+            var title = "Élément " + (index + 1)
+            var url: String? = null
+            val extras = mutableListOf<String>()
+            for (i in 0 until fields.length()) {
+                val field = fields.optJSONObject(i) ?: continue
+                val label = field.optString("label").replace("Ã©", "é").replace("Ã¨", "è").replace("Ã ", "à")
+                val value = field.optString("value").takeIf { it.isNotBlank() } ?: continue
+                when {
+                    label.equals("URL", true) || label.contains("lien", true) -> url = field.optString("href").ifBlank { value }
+                    label.contains("Nom", true) || label.contains("Titre", true) -> title = value
+                    label.contains("Légende", true) || label.contains("caption", true) || label.contains("Artiste", true) -> extras.add(value)
+                    else -> extras.add(label + " : " + value)
+                }
+            }
+            val itemUrl = url ?: item.optString("url").takeIf { it.startsWith("http") }
+            InstagramEntry(title, extras.distinct().joinToString("\n"), itemUrl)
+        }
+    }.getOrElse { emptyList() }
 
     private fun filteredMedia(): List<MediaRecord> = media.filter { m ->
         (!videoOnly || m.isVideo) &&
