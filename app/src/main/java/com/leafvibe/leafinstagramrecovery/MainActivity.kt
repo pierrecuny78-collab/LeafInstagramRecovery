@@ -282,7 +282,15 @@ class MainActivity : ComponentActivity() {
                         items(catalogs, key = { it.hash }) { c ->
                             Card(Modifier.fillMaxWidth().clickable {
                                 selectedCatalog = c
-                                catalogEntries = readCatalogEntries(c)
+                                catalogEntries = emptyList()
+                                busy = true
+                                status = "Lecture du catalogue en cours…"
+                                lifecycleScope.launch {
+                                    val entries = withContext(Dispatchers.IO) { readCatalogEntries(c) }
+                                    catalogEntries = entries
+                                    busy = false
+                                    status = "Catalogue chargé : ${entries.size} entrée(s)."
+                                }
                             }) {
                                 ListItem(
                                     headlineContent = { Text(c.category) },
@@ -327,16 +335,24 @@ class MainActivity : ComponentActivity() {
             val extras = mutableListOf<String>()
             for (i in 0 until fields.length()) {
                 val field = fields.optJSONObject(i) ?: continue
-                val label = field.optString("label").replace("Ã©", "é").replace("Ã¨", "è").replace("Ã ", "à")
-                val value = field.optString("value").takeIf { it.isNotBlank() } ?: continue
+                val label = field.optString("label")
+                    .replace("Ã©", "é").replace("Ã¨", "è").replace("Ã ", "à")
+                    .replace("Ã‰", "É").replace("Ãª", "ê")
+                val value = field.optString("value")
+                val href = field.optString("href")
+                // Certains exports placent l'URL dans href sans valeur textuelle.
                 when {
-                    label.equals("URL", true) || label.contains("lien", true) -> url = field.optString("href").ifBlank { value }
-                    label.contains("Nom", true) || label.contains("Titre", true) -> title = value
-                    label.contains("Légende", true) || label.contains("caption", true) || label.contains("Artiste", true) -> extras.add(value)
-                    else -> extras.add(label + " : " + value)
+                    label.equals("URL", true) || label.contains("lien", true) ->
+                        url = href.takeIf { it.startsWith("http", true) }
+                            ?: value.takeIf { it.startsWith("http", true) }
+                    (label.contains("Nom", true) || label.contains("Titre", true)) && value.isNotBlank() -> title = value
+                    value.isNotBlank() && (label.contains("Légende", true) || label.contains("caption", true) || label.contains("Artiste", true)) -> extras.add(value)
+                    value.isNotBlank() -> extras.add(if (label.isBlank()) value else label + " : " + value)
                 }
             }
-            val itemUrl = url ?: item.optString("url").takeIf { it.startsWith("http") }
+            val itemUrl = url
+                ?: item.optString("url").takeIf { it.startsWith("http", true) }
+                ?: item.optString("href").takeIf { it.startsWith("http", true) }
             InstagramEntry(title, extras.distinct().joinToString("\n"), itemUrl)
         }
     }.getOrElse { emptyList() }
