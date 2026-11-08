@@ -174,7 +174,7 @@ class MainActivity : ComponentActivity() {
                                             FilterChip(
                                                 selected = selectedCategory == cat,
                                                 onClick = { selectedCategory = if (selectedCategory == cat) "Toutes" else cat },
-                                                label = { Text(cat) }
+                                                label = { Text("$cat (${media.count { item -> item.category == cat }})") }
                                             )
                                         }
                                     }
