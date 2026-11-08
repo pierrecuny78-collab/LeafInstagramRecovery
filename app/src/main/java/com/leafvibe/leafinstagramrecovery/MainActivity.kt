@@ -1,6 +1,11 @@
 package com.leafvibe.leafinstagramrecovery
 
 import android.content.Intent
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
+import android.webkit.WebView
+import android.webkit.WebViewClient
 import android.net.Uri
 import android.os.Bundle
 import androidx.activity.ComponentActivity
@@ -9,6 +14,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.clickable
+import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.text.KeyboardOptions
@@ -67,11 +73,19 @@ class MainActivity : ComponentActivity() {
     private var showManageCategories by mutableStateOf(false)
     private var selectedCatalog by mutableStateOf<CatalogRecord?>(null)
     private var catalogEntries by mutableStateOf<List<InstagramEntry>>(emptyList())
+    private var hideCategories by mutableStateOf(false)
+    private var showSettings by mutableStateOf(false)
+    private var themeChoice by mutableStateOf("Violet")
+    private var categoryPlacement by mutableStateOf("Gauche")
+    private var webUrl by mutableStateOf<String?>(null)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         treeUri = prefs.getString("tree", null)?.let(Uri::parse)
         loadIndexes()
+        hideCategories = prefs.getBoolean("hide_categories", false)
+        themeChoice = prefs.getString("theme_choice", "Violet") ?: "Violet"
+        categoryPlacement = prefs.getString("category_placement", "Gauche") ?: "Gauche"
         val savedCategories = prefs.getString("categories", null)
         if (savedCategories != null) runCatching {
             val a = JSONArray(savedCategories)
@@ -79,7 +93,14 @@ class MainActivity : ComponentActivity() {
             for (i in 0 until a.length()) categories.add(a.getString(i))
         }
         setContent {
-            MaterialTheme {
+            val palette = when (themeChoice) {
+                "Océan" -> lightColorScheme(primary = androidx.compose.ui.graphics.Color(0xFF006A75), secondary = androidx.compose.ui.graphics.Color(0xFF4B6268), background = androidx.compose.ui.graphics.Color(0xFFF2FAFB), surface = androidx.compose.ui.graphics.Color(0xFFF2FAFB))
+                "Forêt" -> lightColorScheme(primary = androidx.compose.ui.graphics.Color(0xFF386A45), secondary = androidx.compose.ui.graphics.Color(0xFF52634F), background = androidx.compose.ui.graphics.Color(0xFFF4F8F1), surface = androidx.compose.ui.graphics.Color(0xFFF4F8F1))
+                "Sombre" -> darkColorScheme(primary = androidx.compose.ui.graphics.Color(0xFFD0BCFF))
+                "Rose" -> lightColorScheme(primary = androidx.compose.ui.graphics.Color(0xFF985477), secondary = androidx.compose.ui.graphics.Color(0xFF765568), background = androidx.compose.ui.graphics.Color(0xFFFFF7FA), surface = androidx.compose.ui.graphics.Color(0xFFFFF7FA))
+                else -> lightColorScheme(primary = androidx.compose.ui.graphics.Color(0xFF6750A4), secondary = androidx.compose.ui.graphics.Color(0xFF625B71), background = androidx.compose.ui.graphics.Color(0xFFFFF7FF), surface = androidx.compose.ui.graphics.Color(0xFFFFF7FF))
+            }
+            MaterialTheme(colorScheme = palette) {
                 val zipPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
                     uri?.let {
                         runCatching { contentResolver.takePersistableUriPermission(it, Intent.FLAG_GRANT_READ_URI_PERMISSION) }
@@ -103,6 +124,58 @@ class MainActivity : ComponentActivity() {
                 val jsonPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
                     if (uris.isNotEmpty()) importJsonFiles(uris)
                 }
+                if (showSettings) {
+                    AlertDialog(
+                        onDismissRequest = { showSettings = false },
+                        title = { Text("Personnalisation") },
+                        text = {
+                            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Text("Thème de couleur")
+                                listOf("Violet", "Océan", "Forêt", "Rose", "Sombre").forEach { choice ->
+                                    Row(Modifier.fillMaxWidth().clickable { themeChoice = choice; prefs.edit().putString("theme_choice", choice).apply() }, horizontalArrangement = Arrangement.SpaceBetween) {
+                                        Text(choice); RadioButton(selected = themeChoice == choice, onClick = { themeChoice = choice; prefs.edit().putString("theme_choice", choice).apply() })
+                                    }
+                                }
+                                Text("Position de la barre des catégories")
+                                listOf("Gauche", "Droite", "Dessus", "Dessous").forEach { choice ->
+                                    Row(Modifier.fillMaxWidth().clickable { categoryPlacement = choice; prefs.edit().putString("category_placement", choice).apply() }, horizontalArrangement = Arrangement.SpaceBetween) {
+                                        Text(choice); RadioButton(selected = categoryPlacement == choice, onClick = { categoryPlacement = choice; prefs.edit().putString("category_placement", choice).apply() })
+                                    }
+                                }
+                                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                                    Text("Masquer toutes les catégories")
+                                    Switch(checked = hideCategories, onCheckedChange = { hideCategories = it; prefs.edit().putBoolean("hide_categories", it).apply() })
+                                }
+                            }
+                        },
+                        confirmButton = { TextButton(onClick = { showSettings = false }) { Text("Terminer") } }
+                    )
+                }
+                if (webUrl != null) {
+                    AlertDialog(
+                        onDismissRequest = { webUrl = null },
+                        title = { Text("Aperçu du lien intégré") },
+                        text = {
+                            Column(Modifier.fillMaxWidth().heightIn(min = 300.dp, max = 560.dp)) {
+                                Text(webUrl ?: "", style = MaterialTheme.typography.bodySmall)
+                                AndroidView(
+                                    modifier = Modifier.fillMaxWidth().height(420.dp),
+                                    factory = { context -> WebView(context).apply {
+                                        settings.javaScriptEnabled = false
+                                        settings.domStorageEnabled = false
+                                        settings.allowFileAccess = false
+                                        settings.allowContentAccess = false
+                                        webViewClient = WebViewClient()
+                                        loadUrl(webUrl ?: "about:blank")
+                                    } },
+                                    update = { view -> if (view.url != webUrl) view.loadUrl(webUrl ?: "about:blank") }
+                                )
+                            }
+                        },
+                        confirmButton = { TextButton(onClick = { webUrl = null }) { Text("Fermer") } },
+                        dismissButton = { TextButton(onClick = { webUrl?.let { openInstagramUrl(it) } }) { Text("Application externe") } }
+                    )
+                }
                 if (selectedCatalog != null) {
                     AlertDialog(
                         onDismissRequest = { selectedCatalog = null; catalogEntries = emptyList() },
@@ -116,8 +189,12 @@ class MainActivity : ComponentActivity() {
                                             if (entry.details.isNotBlank()) Text(entry.details, style = MaterialTheme.typography.bodySmall)
                                             if (!entry.url.isNullOrBlank()) {
                                                 Text(entry.url, color = MaterialTheme.colorScheme.primary,
-                                                    modifier = Modifier.clickable { openInstagramUrl(entry.url) })
-                                                TextButton(onClick = { openInstagramUrl(entry.url) }) { Text("Ouvrir le lien Instagram") }
+                                                    modifier = Modifier.clickable { webUrl = entry.url })
+                                                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                                                    TextButton(onClick = { webUrl = entry.url }) { Text("Aperçu") }
+                                                    TextButton(onClick = { copyText(entry.url) }) { Text("Copier") }
+                                                    TextButton(onClick = { openInstagramUrl(entry.url) }) { Text("Externe") }
+                                                }
                                             }
                                         }
                                     }
@@ -172,7 +249,7 @@ class MainActivity : ComponentActivity() {
                         dismissButton = { TextButton(onClick = { showNewCategory = false }) { Text("Annuler") } }
                     )
                 }
-                Scaffold(topBar = { TopAppBar(title = { Text("LeafInstagramRecovery") }) }) { padding ->
+                Scaffold(topBar = { TopAppBar(title = { Text("LeafInstagramRecovery") }, actions = { TextButton(onClick = { showSettings = true }) { Text("Réglages") } }) }) { padding ->
                     LazyColumn(
                         Modifier.fillMaxSize().padding(padding).padding(horizontal = 14.dp, vertical = 10.dp),
                         verticalArrangement = Arrangement.spacedBy(10.dp)
@@ -236,8 +313,26 @@ class MainActivity : ComponentActivity() {
                                 FilterChip(selected = selectedCategory == "Toutes", onClick = { selectedCategory = "Toutes" }, label = { Text("Toutes catégories") })
                             }
                         }
-                        item { Text("Catégories", style = MaterialTheme.typography.titleLarge) }
                         item {
+                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                                Text("Catalogues importés (${catalogs.size})", style = MaterialTheme.typography.titleLarge)
+                                TextButton(onClick = { copyAllCatalogLinks() }, enabled = !busy && catalogs.isNotEmpty()) { Text("Copier tous les liens") }
+                            }
+                        }
+                        items(catalogs, key = { "catalog_top_" + it.hash }) { c ->
+                            Card(Modifier.fillMaxWidth().clickable {
+                                selectedCatalog = c; catalogEntries = emptyList(); busy = true
+                                lifecycleScope.launch {
+                                    catalogEntries = withContext(Dispatchers.IO) { readCatalogEntries(c) }
+                                    busy = false
+                                    status = "Catalogue chargé : ${catalogEntries.size} entrée(s)."
+                                }
+                            }) {
+                                ListItem(headlineContent = { Text(c.category) }, supportingContent = { Text("${c.items} entrées • ${c.bytes / 1024} Ko • ${c.source}") }, trailingContent = { Text("Voir ›", color = MaterialTheme.colorScheme.primary) })
+                            }
+                        }
+                        if (!hideCategories) item { Text("Catégories • barre : $categoryPlacement", style = MaterialTheme.typography.titleLarge) }
+                        if (!hideCategories) item {
                             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                                 categories.chunked(3).forEach { rowCategories ->
                                     Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -285,29 +380,6 @@ class MainActivity : ComponentActivity() {
                             }
                         }
                         item {
-                            Text("Catalogues importés (${catalogs.size})", style = MaterialTheme.typography.titleLarge)
-                        }
-                        items(catalogs, key = { it.hash }) { c ->
-                            Card(Modifier.fillMaxWidth().clickable {
-                                selectedCatalog = c
-                                catalogEntries = emptyList()
-                                busy = true
-                                status = "Lecture du catalogue en cours…"
-                                lifecycleScope.launch {
-                                    val entries = withContext(Dispatchers.IO) { readCatalogEntries(c) }
-                                    catalogEntries = entries
-                                    busy = false
-                                    status = "Catalogue chargé : ${entries.size} entrée(s)."
-                                }
-                            }) {
-                                ListItem(
-                                    headlineContent = { Text(c.category) },
-                                    supportingContent = { Text(c.items.toString() + " entrées • " + (c.bytes / 1024) + " Ko • " + c.source) },
-                                    trailingContent = { Text("Voir ›", color = MaterialTheme.colorScheme.primary) }
-                                )
-                            }
-                        }
-                        item {
                             Text(
                                 "Important : l'export Instagram contient généralement des liens et des métadonnées, pas les fichiers vidéo. Les vidéos doivent être ajoutées depuis des fichiers réellement accessibles ou être présentes dans l'archive. L'application ne contourne pas les accès privés ni les protections Instagram. Les originaux ne sont jamais supprimés automatiquement.",
                                 style = MaterialTheme.typography.bodySmall
@@ -316,6 +388,29 @@ class MainActivity : ComponentActivity() {
                     }
                 }
             }
+        }
+    }
+
+    private fun copyText(value: String) {
+        val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        clipboard.setPrimaryClip(ClipData.newPlainText("Lien Instagram", value))
+        status = "Lien copié."
+    }
+
+    private fun copyAllCatalogLinks() {
+        if (catalogs.isEmpty()) return
+        lifecycleScope.launch {
+            busy = true
+            status = "Extraction des liens des catalogues…"
+            val links = withContext(Dispatchers.IO) {
+                catalogs.flatMap { readCatalogEntries(it) }.mapNotNull { it.url }.distinct()
+            }
+            if (links.isNotEmpty()) {
+                val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                clipboard.setPrimaryClip(ClipData.newPlainText("Liens Instagram", links.joinToString("\\n")))
+                status = "${links.size} liens uniques copiés dans le presse-papiers."
+            } else status = "Aucun lien exploitable trouvé dans les catalogues importés."
+            busy = false
         }
     }
 
