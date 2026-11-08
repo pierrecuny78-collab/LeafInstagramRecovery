@@ -237,8 +237,7 @@ class MainActivity : ComponentActivity() {
     private fun openMedia(record: MediaRecord) {
         val root = treeUri?.let { DocumentFile.fromTreeUri(this, it) } ?: return
         val base = root.findFile("LeafInstagramRecovery") ?: root
-        val categoryFolder = base.findFile(safeFolder(record.category)) ?: base
-        val file = categoryFolder.findFile(record.storedName) ?: base.findFile(record.storedName)
+        val file = base.findFile(record.storedName) ?: base.listFiles().firstOrNull { it.isDirectory }?.findFile(record.storedName)
         if (file == null) { status = "Fichier introuvable sur la carte SD. Reconfigure le dossier si nécessaire."; return }
         val intent = Intent(Intent.ACTION_VIEW).apply {
             setDataAndType(file.uri, if (record.isVideo) "video/*" else record.mime)
@@ -258,7 +257,7 @@ class MainActivity : ComponentActivity() {
                 val added = withContext(Dispatchers.IO) {
                     val root = DocumentFile.fromTreeUri(this@MainActivity, destination) ?: error("Carte SD inaccessible")
                     val folder = root.findFile("LeafInstagramRecovery")?.takeIf { it.isDirectory } ?: root.createDirectory("LeafInstagramRecovery") ?: error("Création du dossier impossible")
-                    val videoFolder = folder.findFile(safeFolder("À classer"))?.takeIf { it.isDirectory } ?: folder.createDirectory(safeFolder("À classer")) ?: error("Création du dossier vidéo impossible")
+                    val videoFolder = folder
                     val hashes = existing.toMutableSet()
                     val result = mutableListOf<MediaRecord>()
                     uris.forEach { uri ->
@@ -400,8 +399,7 @@ class MainActivity : ComponentActivity() {
                             var created: DocumentFile? = null
                             try {
                                 val isVideo = isVideo(lower)
-                                val targetFolderName = if (isVideo) safeFolder("À classer") else "Images"
-                                val targetFolder = folder.findFile(targetFolderName)?.takeIf { it.isDirectory } ?: folder.createDirectory(targetFolderName) ?: error("Création dossier impossible")
+                                val targetFolder = folder
                                 val clean = path.substringAfterLast('/').replace(Regex("[^A-Za-z0-9._-]"), "_").ifBlank { "media" }
                                 val unique = "${UUID.randomUUID().toString().take(8)}_$clean"
                                 created = targetFolder.createFile(mime(lower), unique) ?: error("Création média impossible")
