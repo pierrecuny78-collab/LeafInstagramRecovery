@@ -32,7 +32,8 @@ import java.util.zip.ZipOutputStream
 class LeafAutoBackupWorker(context: Context, params: WorkerParameters) :
     CoroutineWorker(context, params) {
 
-    override suspend fun doWork(): Result = try {
+    override suspend fun doWork(): Result {
+        return try {
         val dataRoot = File(applicationContext.applicationInfo.dataDir)
         val backupDir = File(applicationContext.filesDir, "leaf_backups")
         if (!backupDir.exists() && !backupDir.mkdirs()) return Result.retry()
@@ -98,6 +99,7 @@ class LeafAutoBackupWorker(context: Context, params: WorkerParameters) :
         Result.success()
     } catch (_: Exception) {
         Result.retry()
+    }
     }
 
     companion object {
