@@ -79,8 +79,14 @@ class MainActivity : ComponentActivity() {
     private var categoryPlacement by mutableStateOf("Gauche")
     private var webUrl by mutableStateOf<String?>(null)
 
+    override fun onStop() {
+        LeafAutoBackupScheduler.requestSoon(this)
+        super.onStop()
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        LeafAutoBackupScheduler.install(this)
         treeUri = prefs.getString("tree", null)?.let(Uri::parse)
         loadIndexes()
         hideCategories = prefs.getBoolean("hide_categories", false)
